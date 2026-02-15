@@ -1,0 +1,18 @@
+{
+  "name": "port-customs-stock-bun",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run build:css && bun --watch src/server.ts",
+    "build:css": "bunx tailwindcss -i ./src/styles/input.css -o ./public/assets/styles.css",
+    "watch:css": "bunx tailwindcss -i ./src/styles/input.css -o ./public/assets/styles.css --watch",
+    "seed": "bun run scripts/seed.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14"
+  }
+}
