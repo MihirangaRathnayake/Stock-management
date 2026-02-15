@@ -47,11 +47,11 @@ export function renderDashboardPage(params: {
 }): string {
   const kpiCards = `
     <section class="grid gap-4 md:grid-cols-5">
-      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500">Shipments</p><p class="text-2xl font-bold">${params.kpi.totalShipments}</p></div>
-      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500">Under Inspection</p><p class="text-2xl font-bold">${params.kpi.underInspection}</p></div>
-      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500">On Hold</p><p class="text-2xl font-bold">${params.kpi.onHold}</p></div>
-      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500">Available Qty</p><p class="text-2xl font-bold">${formatNumber(params.kpi.totalAvailableQty)}</p></div>
-      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500">Available Weight (kg)</p><p class="text-2xl font-bold">${formatNumber(params.kpi.totalAvailableWeight)}</p></div>
+      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500"><i class="fa-solid fa-boxes-stacked mr-2 text-cyan-700"></i>Shipments</p><p class="text-2xl font-bold">${params.kpi.totalShipments}</p></div>
+      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500"><i class="fa-solid fa-magnifying-glass mr-2 text-cyan-700"></i>Under Inspection</p><p class="text-2xl font-bold">${params.kpi.underInspection}</p></div>
+      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500"><i class="fa-solid fa-circle-exclamation mr-2 text-cyan-700"></i>On Hold</p><p class="text-2xl font-bold">${params.kpi.onHold}</p></div>
+      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500"><i class="fa-solid fa-scale-balanced mr-2 text-cyan-700"></i>Available Qty</p><p class="text-2xl font-bold">${formatNumber(params.kpi.totalAvailableQty)}</p></div>
+      <div class="rounded-xl bg-white p-4 shadow"><p class="text-xs uppercase text-slate-500"><i class="fa-solid fa-weight-hanging mr-2 text-cyan-700"></i>Available Weight (kg)</p><p class="text-2xl font-bold">${formatNumber(params.kpi.totalAvailableWeight)}</p></div>
     </section>
   `;
 
@@ -108,7 +108,12 @@ export function renderDashboardPage(params: {
     error: params.error,
     content: `
       <section class="space-y-4">
-        <h1 class="text-2xl font-bold">Operational Dashboard</h1>
+        <h1 class="text-2xl font-bold"><i class="fa-solid fa-gauge-high mr-2 text-cyan-700"></i>Operational Dashboard</h1>
+        <div class="flex flex-wrap gap-2">
+          <a href="/shipments/new" class="rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold text-white"><i class="fa-solid fa-plus mr-2"></i>New Shipment</a>
+          <a href="/workflow" class="rounded-lg border border-cyan-700 px-3 py-2 text-sm font-semibold text-cyan-700"><i class="fa-solid fa-list-check mr-2"></i>Inspection Queue</a>
+          <a href="/dsa-demo" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"><i class="fa-solid fa-diagram-project mr-2"></i>DSA Monitor</a>
+        </div>
         ${kpiCards}
       </section>
 

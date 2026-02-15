@@ -1,0 +1,22 @@
+node_modules/
+
+# Bun/TypeScript build outputs
+dist/
+.turbo/
+
+# Local database files
+*.db
+*.db-shm
+*.db-wal
+
+# Environment and local IDE settings
+.env
+.env.*
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

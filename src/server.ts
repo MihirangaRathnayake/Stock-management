@@ -27,6 +27,7 @@ import { renderReportsValueRangePage } from "./templates/pages/reports_value_ran
 import { renderGraphPage } from "./templates/pages/graph";
 import { renderDsaDemoPage } from "./templates/pages/dsa_demo";
 import { renderNotesPage } from "./templates/pages/notes";
+import { renderLoginPage } from "./templates/pages/login";
 
 initDb();
 
@@ -36,6 +37,7 @@ type ShipmentSummary = {
 type UndoAction =
   | { type: "RELEASE"; releaseId: number; releaseNo: string; shipmentId: number; lines: { shipmentItemId: number; qty: number; weightKg: number; value: number }[] }
   | { type: "TRANSFER"; transferId: number; shipmentItemId: number; fromWarehouseId: number; toWarehouseId: number; qty: number; weightKg: number };
+type NotificationEntry = { id: string; message: string; createdAt: string; read: boolean };
 
 type SessionState = {
   activityLinkedList: SinglyLinkedList<string>;
@@ -45,9 +47,25 @@ type SessionState = {
   shipmentHashTable: HashTable<ShipmentSummary>;
   valueBST: BST;
   transferGraph: Graph;
+  authenticated: boolean;
+  username: string | null;
+  notifications: NotificationEntry[];
 };
 const store = new Map<string, SessionState>();
-const newState = (): SessionState => ({ activityLinkedList: new SinglyLinkedList<string>(), activitySerialized: "[]", undoStack: new Stack<UndoAction>(), inspectionQueue: new Queue<number>(), shipmentHashTable: new HashTable<ShipmentSummary>(), valueBST: new BST(), transferGraph: new Graph() });
+const newState = (): SessionState => ({
+  activityLinkedList: new SinglyLinkedList<string>(),
+  activitySerialized: "[]",
+  undoStack: new Stack<UndoAction>(),
+  inspectionQueue: new Queue<number>(),
+  shipmentHashTable: new HashTable<ShipmentSummary>(),
+  valueBST: new BST(),
+  transferGraph: new Graph(),
+  authenticated: false,
+  username: null,
+  notifications: [],
+});
+const AUTH_USERNAME = "customsadmin";
+const AUTH_PASSWORD = "Port@12345";
 
 const html = (b: string, s = 200) => new Response(b, { status: s, headers: { "Content-Type": "text/html; charset=utf-8" } });
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "Content-Type": "application/json; charset=utf-8" } });
@@ -57,7 +75,15 @@ const unflash = (u: URL) => ({ notice: u.searchParams.get("notice") || undefined
 const parseCookies = (h: string | null) => Object.fromEntries((h || "").split(";").map(v => v.trim()).filter(Boolean).map(v => { const i = v.indexOf("="); return [v.slice(0, i), decodeURIComponent(v.slice(i + 1))]; }));
 const session = (req: Request) => { const sid = parseCookies(req.headers.get("cookie")).sessionId; if (sid && store.has(sid)) return { sid, st: store.get(sid)! }; const id = crypto.randomUUID(); const st = newState(); store.set(id, st); return { sid: id, st }; };
 const withSid = (r: Response, sid: string) => { const h = new Headers(r.headers); h.set("Set-Cookie", `sessionId=${sid}; Path=/; HttpOnly; SameSite=Lax`); return new Response(r.body, { status: r.status, headers: h }); };
-const addLog = (st: SessionState, m: string) => { st.activityLinkedList.append(`${new Date().toISOString()} | ${m}`); st.activitySerialized = st.activityLinkedList.serialize(); };
+const addNotification = (st: SessionState, message: string) => {
+  st.notifications.unshift({ id: crypto.randomUUID(), message, createdAt: toIsoNow(), read: false });
+  if (st.notifications.length > 40) st.notifications = st.notifications.slice(0, 40);
+};
+const addLog = (st: SessionState, m: string) => {
+  st.activityLinkedList.append(`${new Date().toISOString()} | ${m}`);
+  st.activitySerialized = st.activityLinkedList.serialize();
+  addNotification(st, m);
+};
 const pForm = async (req: Request) => { const f = await req.formData(); const o: Record<string, string> = {}; for (const [k, v] of f.entries()) if (typeof v === "string") o[k] = v; return o; };
 const dt = (x: string) => { const d = new Date(x); if (Number.isNaN(d.getTime())) throw new ValidationError("Invalid date-time"); return d.toISOString(); };
 const back = (req: Request, f: string) => { const r = req.headers.get("referer"); if (!r) return f; try { const u = new URL(r); return `${u.pathname}${u.search}`; } catch { return f; } };
@@ -103,6 +129,38 @@ const undo = (st: SessionState) => {
 
 type H = (req: Request, url: URL, p: Record<string, string>, st: SessionState) => Promise<Response> | Response;
 const R: { m: string; p: string; h: H }[] = [
+  {
+    m: "GET", p: "/login", h: (_r, u, _p, st) => {
+      if (st.authenticated) return redir("/dashboard");
+      return html(renderLoginPage({ ...unflash(u), defaultUsername: AUTH_USERNAME }));
+    }
+  },
+  {
+    m: "POST", p: "/login", h: async (req, _u, _p, st) => {
+      try {
+        const d = await pForm(req);
+        const username = requireString(d.username, "Username", 64);
+        const password = requireString(d.password, "Password", 128);
+        if (username !== AUTH_USERNAME || password !== AUTH_PASSWORD) {
+          throw new ValidationError("Invalid username or password");
+        }
+        st.authenticated = true;
+        st.username = username;
+        addNotification(st, "Login successful. Welcome to the customs dashboard.");
+        return redir(flash("/dashboard", { notice: `Welcome, ${username}` }));
+      } catch (e) {
+        return redir(flash("/login", { error: e instanceof Error ? e.message : "Login failed" }));
+      }
+    }
+  },
+  {
+    m: "POST", p: "/logout", h: (_r, _u, _p, st) => {
+      st.authenticated = false;
+      st.username = null;
+      st.notifications = [];
+      return redir(flash("/login", { notice: "Logged out successfully" }));
+    }
+  },
   { m: "GET", p: "/", h: (_r, u) => html(renderHomePage(unflash(u))) },
   {
     m: "GET", p: "/dashboard", h: (_r, u) => {
@@ -167,8 +225,9 @@ const R: { m: string; p: string; h: H }[] = [
   },
   {
     m: "POST", p: "/items", h: async (req, _u, _p, st) => {
-      try { const d = await pForm(req), shipmentId = requireInteger(d.shipmentId, "Shipment ID"); const s = shipment(shipmentId); if (!s) throw new ValidationError("Shipment not found"); const hsCode = requireString(d.hsCode, "HS Code", 40), itemName = requireString(d.itemName, "Item Name", 120), unit = requireEnum(d.unit, "Unit", ["pcs", "kg"]), quantity = requireNumber(d.quantity, "Quantity", 0.01), weightKg = requireNumber(d.weightKg, "Weight", 0.01), declaredValue = requireNumber(d.declaredValue, "Declared Value", 0), warehouseId = requireInteger(d.warehouseId, "Warehouse"); if (!canFit(warehouseId, quantity, weightKg)) throw new ValidationError("Warehouse capacity exceeded for quantity or weight"); db.query(`INSERT INTO shipment_items(shipmentId,hsCode,itemName,unit,receivedQty,receivedWeightKg,declaredValue,warehouseId,createdAt) VALUES(?,?,?,?,?,?,?,?,?)`).run(shipmentId, hsCode, itemName, unit, quantity, weightKg, declaredValue, warehouseId, toIsoNow()); addLog(st, `Added item ${hsCode} to shipment ${s.referenceNo}`); return redir(flash(`/shipments/${shipmentId}`, { notice: "Item added" })); }
-      catch (e) { const d = await pForm(req); return redir(flash(`/items/add?shipmentId=${Number(d.shipmentId || "0")}`, { error: e instanceof Error ? e.message : "Failed" })); }
+      const d = await pForm(req);
+      try { const shipmentId = requireInteger(d.shipmentId, "Shipment ID"); const s = shipment(shipmentId); if (!s) throw new ValidationError("Shipment not found"); const hsCode = requireString(d.hsCode, "HS Code", 40), itemName = requireString(d.itemName, "Item Name", 120), unit = requireEnum(d.unit, "Unit", ["pcs", "kg"]), quantity = requireNumber(d.quantity, "Quantity", 0.01), weightKg = requireNumber(d.weightKg, "Weight", 0.01), declaredValue = requireNumber(d.declaredValue, "Declared Value", 0), warehouseId = requireInteger(d.warehouseId, "Warehouse"); if (!canFit(warehouseId, quantity, weightKg)) throw new ValidationError("Warehouse capacity exceeded for quantity or weight"); db.query(`INSERT INTO shipment_items(shipmentId,hsCode,itemName,unit,receivedQty,receivedWeightKg,declaredValue,warehouseId,createdAt) VALUES(?,?,?,?,?,?,?,?,?)`).run(shipmentId, hsCode, itemName, unit, quantity, weightKg, declaredValue, warehouseId, toIsoNow()); addLog(st, `Added item ${hsCode} to shipment ${s.referenceNo}`); return redir(flash(`/shipments/${shipmentId}`, { notice: "Item added" })); }
+      catch (e) { return redir(flash(`/items/add?shipmentId=${Number(d.shipmentId || "0")}`, { error: e instanceof Error ? e.message : "Failed" })); }
     }
   },
   {
@@ -179,7 +238,20 @@ const R: { m: string; p: string; h: H }[] = [
       db.query(`DELETE FROM shipment_items WHERE id=?`).run(itemId); addLog(st, `Deleted item ${i.hsCode}`); return redir(flash(`/shipments/${i.shipmentId}`, { notice: "Item deleted" }));
     }
   },
-  { m: "GET", p: "/warehouses", h: (_r, u) => html(renderWarehousesPage({ ...unflash(u), warehouses: util() })) },
+  {
+    m: "GET", p: "/warehouses", h: (_r, u) => {
+      const warehouses = util().map((w) => ({
+        id: w.warehouseId,
+        code: w.warehouseCode,
+        name: w.warehouseName,
+        capacityQty: w.capacityQty,
+        capacityWeightKg: w.capacityWeightKg,
+        usedQty: w.usedQty,
+        usedWeightKg: w.usedWeightKg,
+      }));
+      return html(renderWarehousesPage({ ...unflash(u), warehouses }));
+    }
+  },
   {
     m: "POST", p: "/warehouses", h: async (req, _u, _p, st) => {
       try { const d = await pForm(req), id = Number(d.id || "0"), code = requireString(d.code, "Code", 30), name = requireString(d.name, "Name", 120), capacityQty = requireNumber(d.capacityQty, "Capacity Qty", 0), capacityWeightKg = requireNumber(d.capacityWeightKg, "Capacity Weight", 0);
@@ -228,8 +300,9 @@ const R: { m: string; p: string; h: H }[] = [
   },
   {
     m: "POST", p: "/release", h: async (req, _u, _p, st) => {
+      const d = await pForm(req);
       try {
-        const d = await pForm(req), shipmentId = requireInteger(d.shipmentId, "Shipment ID"), s = shipment(shipmentId); if (!s) throw new ValidationError("Shipment not found");
+        const shipmentId = requireInteger(d.shipmentId, "Shipment ID"), s = shipment(shipmentId); if (!s) throw new ValidationError("Shipment not found");
         const releaseNo = requireString(d.releaseNo, "Release No", 50), releasedAt = dt(requireString(d.releasedAt, "Released At", 40)), officerName = requireString(d.officerName, "Officer Name", 120);
         const rows = itemRows(shipmentId), lines: { shipmentItemId: number; qty: number; weightKg: number; value: number }[] = [];
         for (const i of rows) { const q = Number(d[`releaseQty_${i.id}`] || "0"); if (!Number.isFinite(q) || q <= 0) continue; const b = bal(i); if (q > b.availableQty + 0.0001) throw new ValidationError(`Cannot release more than available for ${i.hsCode}`); const uw = i.receivedQty > 0 ? i.receivedWeightKg / i.receivedQty : 0, uv = i.receivedQty > 0 ? i.declaredValue / i.receivedQty : 0; lines.push({ shipmentItemId: i.id, qty: q, weightKg: Number((q * uw).toFixed(2)), value: Number((q * uv).toFixed(2)) }); }
@@ -237,7 +310,7 @@ const R: { m: string; p: string; h: H }[] = [
         let releaseId = 0; db.transaction(() => { const r = db.query(`INSERT INTO releases(shipmentId,releaseNo,releasedAt,officerName) VALUES(?,?,?,?)`).run(shipmentId, releaseNo, releasedAt, officerName) as any; releaseId = Number(r.lastInsertRowid); lines.forEach(l => db.query(`INSERT INTO release_items(releaseId,shipmentItemId,qty,weightKg,value) VALUES(?,?,?,?,?)`).run(releaseId, l.shipmentItemId, l.qty, l.weightKg, l.value)); })();
         const still = itemRows(shipmentId).some(i => bal(i).availableQty > 0.0001); db.query(`UPDATE shipments SET status=? WHERE id=?`).run(still ? "CLEARED" : "RELEASED", shipmentId);
         st.undoStack.push({ type: "RELEASE", releaseId, releaseNo, shipmentId, lines }); addLog(st, `Created release ${releaseNo} for shipment ${s.referenceNo}`); return redir(flash(`/release/${releaseId}`, { notice: `Release ${releaseNo} created` }));
-      } catch (e) { const d = await pForm(req); return redir(flash(`/release/new?shipmentId=${Number(d.shipmentId || "0")}`, { error: e instanceof Error ? e.message : "Failed" })); }
+      } catch (e) { return redir(flash(`/release/new?shipmentId=${Number(d.shipmentId || "0")}`, { error: e instanceof Error ? e.message : "Failed" })); }
     }
   },
   {
@@ -260,14 +333,15 @@ const R: { m: string; p: string; h: H }[] = [
   },
   {
     m: "POST", p: "/transfer", h: async (req, _u, _p, st) => {
-      try { const d = await pForm(req), shipmentItemId = requireInteger(d.shipmentItemId, "Item ID"), fromWarehouseId = requireInteger(d.fromWarehouseId, "From Warehouse"), toWarehouseId = requireInteger(d.toWarehouseId, "To Warehouse"), qty = requireNumber(d.qty, "Qty", 0.01), weightKg = requireNumber(d.weightKg, "Weight", 0.01), transferredAt = dt(requireString(d.transferredAt, "Transferred At", 40));
+      const d = await pForm(req);
+      try { const shipmentItemId = requireInteger(d.shipmentItemId, "Item ID"), fromWarehouseId = requireInteger(d.fromWarehouseId, "From Warehouse"), toWarehouseId = requireInteger(d.toWarehouseId, "To Warehouse"), qty = requireNumber(d.qty, "Qty", 0.01), weightKg = requireNumber(d.weightKg, "Weight", 0.01), transferredAt = dt(requireString(d.transferredAt, "Transferred At", 40));
         if (fromWarehouseId === toWarehouseId) throw new ValidationError("Source and destination warehouse cannot match");
         const i = db.query(`SELECT id,shipmentId,hsCode FROM shipment_items WHERE id=?`).get(shipmentItemId) as any; if (!i) throw new ValidationError("Item not found");
         const fb = itemWhBal(shipmentItemId, fromWarehouseId); if (qty > fb.qty + 0.0001 || weightKg > fb.weightKg + 0.0001) throw new ValidationError("Transfer exceeds available stock in source warehouse");
         if (!canFit(toWarehouseId, qty, weightKg)) throw new ValidationError("Destination warehouse capacity exceeded");
         const r = db.query(`INSERT INTO transfers(shipmentItemId,fromWarehouseId,toWarehouseId,qty,weightKg,transferredAt) VALUES(?,?,?,?,?,?)`).run(shipmentItemId, fromWarehouseId, toWarehouseId, qty, weightKg, transferredAt) as any;
         const transferId = Number(r.lastInsertRowid); st.undoStack.push({ type: "TRANSFER", transferId, shipmentItemId, fromWarehouseId, toWarehouseId, qty, weightKg }); addLog(st, `Transferred ${i.hsCode} qty ${qty} from #${fromWarehouseId} to #${toWarehouseId}`); return redir(flash(`/shipments/${i.shipmentId}`, { notice: `Transfer #${transferId} recorded` }));
-      } catch (e) { const d = await pForm(req); return redir(flash(`/transfer/new?itemId=${Number(d.shipmentItemId || "0")}`, { error: e instanceof Error ? e.message : "Failed" })); }
+      } catch (e) { return redir(flash(`/transfer/new?itemId=${Number(d.shipmentItemId || "0")}`, { error: e instanceof Error ? e.message : "Failed" })); }
     }
   },
   { m: "POST", p: "/transfer/undo", h: (req, _u, _p, st) => { const x = undo(st); return redir(flash(back(req, "/dsa-demo"), x.ok ? { notice: x.message } : { error: x.message })); } },
@@ -290,6 +364,23 @@ const R: { m: string; p: string; h: H }[] = [
   },
   { m: "POST", p: "/dsa-demo/reset", h: (_r, _u, _p, st) => { st.activityLinkedList.clear(); st.activitySerialized = st.activityLinkedList.serialize(); st.undoStack.clear(); st.inspectionQueue.clear(); st.shipmentHashTable = new HashTable<ShipmentSummary>(); st.valueBST.clear(); st.transferGraph.clear(); addLog(st, "Session data structures reset"); return redir(flash("/dsa-demo", { notice: "Session DS reset" })); } },
   { m: "GET", p: "/notes", h: () => html(renderNotesPage()) },
+  {
+    m: "GET", p: "/api/session-state", h: (_r, _u, _p, st) => {
+      const unreadCount = st.notifications.filter(n => !n.read).length;
+      return json({
+        authenticated: st.authenticated,
+        username: st.username,
+        notifications: st.notifications.slice(0, 20).map(n => ({ message: n.message, createdAt: n.createdAt })),
+        unreadCount,
+      });
+    }
+  },
+  {
+    m: "POST", p: "/api/session-state/clear", h: (_r, _u, _p, st) => {
+      st.notifications = [];
+      return json({ ok: true });
+    }
+  },
   { m: "GET", p: "/api/shipments", h: () => json(shipments()) },
   { m: "GET", p: "/api/shipments/:id", h: (_r, _u, p) => { const id = Number(p.id), s = shipment(id); if (!s) return json({ error: "Shipment not found" }, 404); return json({ shipment: s, items: itemRows(id).map(i => ({ ...i, ...bal(i) })) }); } },
   { m: "GET", p: "/api/reports/top-hs-codes", h: () => json(topHs(10)) },
@@ -301,6 +392,13 @@ Bun.serve({
     const url = new URL(req.url);
     if (url.pathname.startsWith("/assets/")) { const file = Bun.file(`./public${url.pathname}`); if (await file.exists()) return new Response(file, { headers: { "Content-Type": url.pathname.endsWith(".css") ? "text/css; charset=utf-8" : "application/octet-stream" } }); return new Response("Not found", { status: 404 }); }
     const { sid, st } = session(req);
+    const isPublicPath = url.pathname === "/login" || url.pathname === "/api/session-state" || url.pathname === "/api/session-state/clear";
+    if (!st.authenticated && !isPublicPath) {
+      return withSid(redir(flash("/login", { error: "Please login to access the system" })), sid);
+    }
+    if (st.authenticated && url.pathname === "/login" && req.method === "GET") {
+      return withSid(redir("/dashboard"), sid);
+    }
     for (const r of R) if (r.m === req.method) { const p = match(r.p, url.pathname); if (p) try { const out = await r.h(req, url, p, st); store.set(sid, st); return withSid(out, sid); } catch (e) { return withSid(html(pageLayout({ title: "Error", error: e instanceof Error ? e.message : "Server error", content: "<p class='text-sm text-slate-600'>Request failed.</p>" }), 500), sid); } }
     return withSid(html(pageLayout({ title: "404", error: "Page not found", content: "" }), 404), sid);
   },
